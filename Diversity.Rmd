@@ -1,0 +1,392 @@
+---
+title: "Diversity"
+author: "Jonathan Bourne"
+date: "25 May 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Setup}
+packages <- c("dplyr", "magrittr", "tidyr", "ggplot2", "caret", "openxlsx", "maptools", "rgeos", "ggmap", "scales", "RColorBrewer", "xtable", "stargazer")
+
+new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+
+lapply(packages, library, character.only = TRUE)
+
+basewd <-"~/Dropbox/DiversityAWS"
+DataFolder <- file.path(basewd, "Data")
+ShapeFiles <- file.path(DataFolder,"ShapeFiles")
+Figures <- file.path(basewd, "Figures")
+
+select <-dplyr::select
+
+```
+
+```{r}
+
+setwd(DataFolder)
+
+basedata <- read.xlsx("ward-atlas-data.xlsx", startRow = 3, cols=1:36, sheet = 2)
+
+#Extract from the ward level data information on Area and ethnicity, create a white british variable that is distinct from White. Calculate the gini coefficients
+ward <- basedata  %>%
+  select(Codes:Square.Kilometres, White:Other.White) %>% select(-c(White.British:White.Gypsy.or.Irish.Traveller)) %>% 
+  mutate(White.British = White-Other.White) %>%
+  mutate(Total =  rowSums(.[8:13]), ginisimpethnic = 1-rowSums((.[7:11])^2)/Total^2,ginisimp= 1-rowSums((.[8:13])^2)/Total^2)
+
+
+London <- ward %>% filter(is.na(Borough))
+
+ward %<>% filter(!is.na(Borough))
+
+#Create a Dataset that is for london Bouroughs
+borough <- ward %>% select(-Names) %>% group_by(Borough) %>% 
+  mutate(fract = Total/sum(Total), ginisimpethnic=ginisimpethnic*fract, ginisimp =ginisimp*fract) %>%
+summarise_each(funs(sum),Hectares:ginisimp ) %>% 
+  mutate(borginisimpethnic = 1-rowSums((.[4:8])^2)/Total^2,
+         borginisimp= 1-rowSums((.[5:10])^2)/Total^2,
+         ratioethnic = ginisimpethnic/borginisimpethnic,
+         ratio = ginisimp/borginisimp) 
+
+#Construct a single entity that gives the index for the whole of london
+London <- borough %>% mutate(fract = Total/sum(Total), ginisimpethnic=ginisimpethnic*fract,
+                             ginisimp =ginisimp*fract, 
+                             borginisimpethnic=borginisimpethnic*fract, 
+                             borginisimp =borginisimp*fract) %>% 
+  summarise_each(funs(sum),Hectares:borginisimp ) %>% 
+  mutate(cityginisimpethnic = 1-rowSums((.[3:7])^2)/Total^2,
+         cityginisimp= 1-rowSums((.[4:9])^2)/Total^2,
+         ratioethnic = ginisimpethnic/cityginisimpethnic,
+         ratio = ginisimp/cityginisimp)
+
+```
+
+#Maximum Diversity 
+As diversity is relative to perfectly equal weights diversity is maximised at the total maximum number of ethnicities. in this model there are two different numbers one for seperating White British from White (Brexit model) and the other where all described as white are included in a single group (Visible ethnic minorirty model.)
+```{r}
+#in the White British and not White model
+#LADginisimp
+1-2*(1/2)^2
+
+#white british and white model
+#LADginisimpethnic
+1-6*(1/6)^2
+
+```
+
+#England and wales integration
+
+
+```{r}
+#length(readLines("KS201EWDATA.CSV")) #total number of lines in the file
+```
+
+Import England and wales
+```{r}
+#Output area data
+Kdata <- read.csv("KS201EWDATA.CSV", stringsAsFactors = FALSE) 
+
+#Column names
+Kdesc <- read.csv("KS201EWDESC0.CSV", stringsAsFactors = FALSE) 
+
+#Built up area association
+BUA <- read.csv("OA11_BUASD11_BUA11_LAD11_RGN11_EW_LU.csv", stringsAsFactors = FALSE)
+```
+
+
+```{r}
+#Subset the data frame to take only the columns involving the ethnicities we are interested in
+Kpercs <- Kdata[,c(1:2,21:38)]
+names(Kpercs)[-1] <- make.names(Kdesc[c(1,20:37), 4])
+
+#The ethnicities are two detailed we will combine the subgroups into larger ethnic groups
+Kpercs %<>% transmute(GeographyCode = GeographyCode,
+                      TotalPop = All.categories..Ethnic.group,
+                          Asian = rowSums(select(.,starts_with("Asian"))),
+                          Black = rowSums(select(.,starts_with("Black"))),
+                          Mixed = rowSums(select(.,starts_with("Mixed"))),
+                          Other= rowSums(select(.,starts_with("Other"))),
+                          White = rowSums(select(.,starts_with("White"))),
+                          WhiteBrit = White,
+                          White.Other = White..Other.White,
+                          WhiteBrit= WhiteBrit-White.Other) %>%
+  mutate_each(funs(./100), -GeographyCode, -TotalPop)
+
+#Calculate the Gini coefficient
+Kpercs %<>% mutate(ginisimpethnic= 1-rowSums(.[,c(3:6,8:9)]^2),
+                   ginisimp=1-((1-WhiteBrit)^2 + WhiteBrit^2) )
+names(Kpercs)[1] <- "OA11CD" #there is some bug which means the header needs to be renamed before merging
+Kpercs %<>% inner_join(., BUA, by = "OA11CD")
+
+
+#LAD stands for local aurthority district. This peice of code allows for the whole of london to be treated as a single unit by mergeing there codes into a single "London"
+LADS <- BUA %>% mutate(islondon= ifelse(RGN11CD =="E12000007","E12000007" ,LAD11CD),
+                       islondonNM= ifelse(RGN11CD =="E12000007","London" ,LAD11NM)
+                       )%>% 
+  group_by(LAD11CD) %>% 
+  summarise_each(funs(first), LAD11NM,RGN11CD, RGN11NM, islondon, islondonNM)
+
+#LAD diversity
+LADdiv <- Kpercs %>% group_by(LAD11CD) %>% mutate(fract = TotalPop/sum(TotalPop)) %>%
+                    mutate_each( funs(.*fract), Asian:ginisimp)  %>% summarise_each(funs(sum),TotalPop:ginisimp ) %>% 
+  mutate(LADginisimpethnic= 1-rowSums(.[,c(3:6,8:9)]^2),
+                   LADginisimp=1-((1-WhiteBrit)^2 + WhiteBrit^2) ,
+         ratioethnic = ginisimpethnic/LADginisimpethnic,
+         ratio = ginisimp/LADginisimp)
+
+```
+
+
+London as a single unit
+```{r}
+#London chunked as 1 block
+LADSLON <- LADS %>% group_by(islondon) %>% 
+  summarise_each(funs(first), RGN11CD, RGN11NM, islondonNM)
+
+LADdivlon <- Kpercs %>% mutate(islondon= ifelse(RGN11CD =="E12000007","E12000007" ,LAD11CD))%>%
+  group_by(islondon) %>% mutate(fract = TotalPop/sum(TotalPop)) %>%
+                    mutate_each( funs(.*fract), Asian:ginisimp)  %>% summarise_each(funs(sum),TotalPop:ginisimp ) %>% 
+  mutate(LADginisimpethnic= 1-rowSums(.[,c(3:6,8:9)]^2),
+                   LADginisimp=1-((1-WhiteBrit)^2 + WhiteBrit^2) ,
+         ratioethnic = ginisimpethnic/LADginisimpethnic,
+         ratio = ginisimp/LADginisimp) %>% inner_join(.,LADSLON, by="islondon")
+
+```
+
+
+glm for fit
+```{r}
+predmod <-train(x =select(LADdivlon, ginisimp, LADginisimp), y = LADdivlon$ratio, method = "glm" )
+
+gini2 <- (LADdivlon$LADginisimp)^2
+predmod3 <- lm( LADdivlon$ginisimp ~  LADdivlon$LADginisimp+ gini2 +0)
+
+
+gini3 <- (LADdiv$LADginisimp)^2
+predmod4 <- lm( LADdiv$ginisimp ~  LADdiv$LADginisimp+ gini3 +0)
+
+
+    LADdivlon<-   LADdivlon %>% bind_cols(.,  data.frame(
+  predictedratio = predict(predmod, select(.,ginisimp, LADginisimp)),
+  predictedgini= predict(predmod3, select(.,ratio, LADginisimp)))) %>% 
+      mutate(pred.gin.rat =ifelse(predictedgini/LADginisimp>1, 1, predictedgini/LADginisimp), seg.int.rat = (ratio-pred.gin.rat)/pred.gin.rat )%>% mutate(islondonNM = sub(", City of", "", islondonNM), islondonNM = sub(" with Darwen", "", islondonNM))
+    
+
+    LADdiv<-   LADdiv %>% bind_cols(.,  data.frame(
+  predictedgini= predict(predmod4, select(.,ratio, LADginisimp)))) %>% 
+      mutate(pred.gin.rat =ifelse(predictedgini/LADginisimp>1, 1, predictedgini/LADginisimp), seg.int.rat = (ratio-pred.gin.rat)/pred.gin.rat )%>% 
+      inner_join(.,LADS, by="LAD11CD") %>%
+      mutate(LAD11NM = sub(", City of", "", LAD11NM), LAD11NM = sub(" with Darwen", "", LAD11NM))
+
+    
+    
+```
+
+Biggest cities
+```{r}
+#"Sheffield","Leicester",
+Cities <- c("London", "Birmingham", "Leeds",  "Bradford", "Manchester", "Liverpool", "Bristol","Cardiff",  "Oldham", "Blackburn", "Burnley", "Oxford")
+
+
+```
+
+#Figure of diversities
+The below figure plots all the largest cities in England and Wales against a general linear model of uk diversity, and the line of perfect integration.
+```{r Diversity Model}
+
+ggplot(LADdivlon, aes(x=LADginisimp, y=ginisimp)) +geom_point(alpha = 0.2) + ggtitle("English/Welsh Ethnic \nDiversity, across Cities and Counties")+ ylab("Neighbourhood") +xlab("Borough/County") + 
+  geom_abline(intercept= 0, slope = 1, linetype =2) +
+  geom_line(aes(x= LADginisimp, y= predictedgini), color = "red")+ 
+  geom_point(data = filter(LADdivlon,islondonNM %in% Cities), aes(x=LADginisimp, y=ginisimp))+
+  geom_text(data = filter(LADdivlon,islondonNM %in% Cities), 
+            aes(x=LADginisimp, y=ginisimp, label=islondonNM ),
+            vjust = 0, nudge_y = -0.03)
+setwd(Figures)
+ggsave("SegIndex.png")
+```
+
+#create a coloured map of British diversity
+
+The instructions for doing this come from 
+http://www.r-bloggers.com/mapping-with-ggplot-create-a-nice-choropleth-map-in-r/
+
+```{r}
+
+setwd(ShapeFiles)
+states.shp <- readShapeSpatial("Local_UnitaryAuthority.shp")
+names(states.shp)
+print(states.shp$NAME)
+print(states.shp$CODE)
+
+mapdata<- data.frame(CODE = as.character(states.shp$CODE) ) %>% 
+  left_join(., select(LADdiv, LAD11CD, ratio), by =c("CODE" ="LAD11CD")) 
+
+#delete?
+mapdata<- data.frame(CODE = as.character(states.shp$CODE) ) %>% 
+  left_join(., LADdiv, by =c("CODE" ="LAD11CD")) 
+
+
+states.shp.f <- fortify(states.shp, region = "CODE")
+
+merge.shp.coef <- right_join(states.shp.f, mapdata, by = c("id"="CODE"))
+
+final.plot <- merge.shp.coef[order(merge.shp.coef$order), ] 
+sewd(DataFolder)
+saveRDS(final.plot, file = "britaindataframe.rds" )
+#final.plot <- readRDS("britaindataframe.rds")
+
+setwd(Figures)
+ggplot(data = final.plot[!is.na(final.plot$ratio),], 
+       aes(x = long, y = lat, group = group)) + geom_path() +
+  geom_polygon(aes(fill = seg.int.rat)) + scale_fill_gradient2(low = "red", high = "blue")+
+    ggtitle("Map of England and Wales Local authorities \nby Integration Index")
+ggsave("Integration.png")
+
+ggplot(data = final.plot[!is.na(final.plot$ratio),], aes(x = long, y = lat, group = group)) + geom_path() +
+  geom_polygon(aes(fill = LADginisimp)) + scale_fill_gradient2(low = "green", high = "blue")+ 
+  ggtitle("Map of England and Wales Local authorities \nby diversity score ")
+ggsave("Diversity.png")
+
+
+ggplot(data = filter(final.plot, RGN11CD == "E12000007"), aes(x = long, y = lat, group = group)) + geom_path() +
+  geom_polygon(aes(fill = seg.int.rat)) + scale_fill_gradient2(low = "red", high = "blue") + 
+  ggtitle("Map of London's Local authorities \nby diversity score ")
+ggsave("DiversityLondon.png")
+
+#test2 <-filter(test, RGN11CD == "E12000007")
+
+```
+
+
+
+where are white Brits a minority
+```{r}
+
+Wmin <- Kpercs %>% filter(WhiteBrit<0.5)
+
+#Average percent of each lsoa
+mean(Kpercs$WhiteBrit)
+
+#The fraction of LSOA's that white british make up less than 50% of the population
+nrow(Wmin)/nrow(Kpercs)
+
+#White Britons make up the following percentage of areas where they are less than 50%
+sum(Wmin$TotalPop*Wmin$WhiteBrit)/sum(Wmin$TotalPop)
+
+# 
+sum(Wmin$TotalPop)/sum(Kpercs$TotalPop)
+
+#Percent of white britons living in an area where they are a minority
+sum(Wmin$TotalPop*Wmin$WhiteBrit)/sum(Kpercs$TotalPop*Kpercs$WhiteBrit)
+#Percent of everyone else living in an area where they are a minority
+1-sum(Wmin$TotalPop*(1-Wmin$WhiteBrit))/sum(Kpercs$TotalPop*(1-Kpercs$WhiteBrit))
+
+ggplot(Kpercs, aes(x=WhiteBrit*100), fill = blue) +
+  geom_density(fill = "steelblue", alpha = 0.5) +
+  labs(title = "White British as a percentage\n of the local population", x = "White British as percentage of Population") +
+  geom_segment(aes(x = mean(Kpercs$WhiteBrit)*100, y = 0, xend = mean(Kpercs$WhiteBrit)*100, yend = 0.05, colour = "segment")) + 
+  theme(legend.position ="none") +
+  annotate("text", x = mean(Kpercs$WhiteBrit)*100, y = 0.06, label = paste("Average",round(mean(Kpercs$WhiteBrit)*100), "%"))
+ggsave("WhiteBritArea.png")
+
+ggplot(Wmin, aes(x=WhiteBrit*100), fill = blue) +
+    geom_density(fill = "steelblue", alpha = 0.5) +
+  ggtitle("White British as a percentage\n of the local population where White British\n is less than 50% of the local population")
+
+#White British make up less than x in y LSOA
+
+WhiteBritPerc <- data.frame(LessThan = seq(0,1, 0.05)*100,  Percentage =  sapply(seq(0,1, 0.05), function(n){
+  sum(Kpercs$WhiteBrit > n)/nrow(Kpercs)
+}) %>% round(.,3) * 100
+)
+
+WhiteBritPerc %>% ggplot(., aes(x = LessThan, y = Percentage)) + geom_line() +
+  labs(title = "White British ", y = "Percentage of LSOA's",
+       x = "White British as % of population")
+
+```
+
+Brexit Votes
+```{r}
+
+BrexitVotes <-read.csv("http://www.electoralcommission.org.uk/__data/assets/file/0014/212135/EU-referendum-result-data.csv")
+
+BrexitVotes <-BrexitVotes %>% rename(LAD11CD = Area_Code) %>% 
+  select(LAD11CD, Pct_Remain) %>% 
+  left_join(LADdiv ,., by = "LAD11CD") %>% filter(!is.na(Pct_Remain))
+
+set.seed(1223)
+ trainsamp<-createDataPartition(BrexitVotes$Pct_Remain, p = 0.5, list =F)
+
+Mod1 <- train(x=select(BrexitVotes, ginisimp,  seg.int.rat)[trainsamp,],
+              y=BrexitVotes$Pct_Remain[trainsamp],
+       method ="lmStepAIC")
+
+preds1 <- predict(Mod1, BrexitVotes[-trainsamp,])
+
+postResample(preds1, BrexitVotes$Pct_Remain[-trainsamp])
+summary(Mod1)
+
+coef(Mod1$finalModel)
+```
+
+```{r}
+BrexitVotes2 <- BrexitVotes %>% mutate(Pct_Remain = as.factor(Pct_Remain>50))
+
+set.seed(1223)
+trainsamp<-createDataPartition(BrexitVotes2$Pct_Remain, p = 0.6, list =F)
+
+
+Mod2 <- train(x=select(BrexitVotes2, LADginisimp, seg.int.rat)[trainsamp,] %>% as.data.frame,
+              y=(BrexitVotes2$Pct_Remain[trainsamp]),
+       method ="glm", family="binomial")
+
+preds2 <- predict(Mod2, BrexitVotes2[-trainsamp,])
+
+confusionMatrix(preds2, BrexitVotes2$Pct_Remain[-trainsamp]) 
+
+confusionMatrix(preds2, BrexitVotes2$Pct_Remain[-trainsamp])$table %>% 
+  as.data.frame %>% spread(key = Reference, value = Freq)%>% stargazer(type = "html", summary = FALSE, rownames = FALSE)
+
+
+summary(Mod2)
+coef(Mod2$finalModel)
+```
+
+
+Table of the most and least integrated
+```{r}
+test <- BrexitVotes %>% arrange(seg.int.rat) %>% 
+  select(RGN11NM, LAD11NM, seg.int.rat, Pct_Remain) %>%
+  setNames(c("Region", "County/Borough", "Index", "Brexit")) %>%
+  mutate(Index = round(Index, 2), Brexit = if_else(Brexit>50, "In", "Out")) %>%
+  slice(1:10) %>% stargazer(type = "html", summary = FALSE)
+  
+MostInt <- BrexitVotes %>% arrange(desc(seg.int.rat)) %>% 
+  select(RGN11NM, LAD11NM, seg.int.rat, Pct_Remain) %>%
+  setNames(c("Region", "County/Borough", "Index", "Brexit")) %>%
+  mutate(Index = round(Index, 2), Brexit = if_else(Brexit>50, "In", "Out"))
+
+MostInt %>%  slice(1:10) %>% stargazer(type = "html", summary = FALSE)
+
+setwd(Figures)
+MostInt %>% ggplot(., aes(x= Brexit, y= Index, fill = Brexit)) + geom_boxplot() + 
+  labs(title ="Brexit vote by Integration score", 
+       x = "Brexit Vote", 
+       y= "Integration Index Score") + 
+  theme(legend.position ="none")
+ggsave("BrexitIntScore.png")
+
+t.test(MostInt$Index[MostInt$Brexit == "In"],
+       MostInt$Index[MostInt$Brexit == "In"],
+       alternative = "greater")
+
+
+```
+
+
