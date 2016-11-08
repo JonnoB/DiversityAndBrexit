@@ -5,6 +5,14 @@ date: "25 May 2016"
 output: html_document
 ---
 
+
+deprivation link
+https://www.gov.uk/government/uploads/system/uploads/attachment_data/file/467767/File_4_ID_2015_Sub-domains_of_deprivation.xlsx
+
+
+2001 census data
+http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip?$ph=60_61_64_65&step=6&downloadLargeFile=true&fileIndex=1
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -26,6 +34,32 @@ Figures <- file.path(basewd, "Figures")
 select <-dplyr::select
 
 ```
+
+
+```{r}
+setwd(DataFolder)
+
+deprivation <-read.xlsx("File_4_ID_2015_Sub-domains_of_deprivation.xlsx")
+
+```
+
+open 2001 ethnivity tables
+```{r}
+
+download.file("http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip", "test.zip")
+
+#unzip folder
+con <- unz(description="DownloadData.zip", filename="UV090301_88_GeoPolicy_UK_LSOA.txt")
+dir.create("Census2001")
+setwd("./Census2001")
+unzip("DownloadData.zip")
+
+#import and fix headers
+Census2001 <-read.csv("UV090301_88_GeoPolicy_UK_LSOA.csv", skip = 5)
+names(Census2001)[13:ncol(Census2001)] <-make.names(read_csv("UV090301_88_GeoPolicy_UK_LSOA.csv", skip =1,n_max =1))[13:ncol(Census2001)]
+
+```
+
 
 ```{r}
 
