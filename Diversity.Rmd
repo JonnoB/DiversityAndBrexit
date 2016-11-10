@@ -13,12 +13,16 @@ https://www.gov.uk/government/uploads/system/uploads/attachment_data/file/467767
 2001 census data
 http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip?$ph=60_61_64_65&step=6&downloadLargeFile=true&fileIndex=1
 
+Converting 2001 LSOA to 2011 LAD's
+http://webarchive.nationalarchives.gov.uk/20160105160709/http://www.ons.gov.uk/ons/external-links/other/2001-lower-layer-super-output-areas--lsoa--to-2011-lsoas-and-lads.html
+
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r Setup}
-packages <- c("dplyr", "magrittr", "tidyr", "ggplot2", "caret", "openxlsx", "maptools", "rgeos", "ggmap", "scales", "RColorBrewer", "xtable", "stargazer")
+packages <- c("dplyr", "magrittr", "tidyr", "ggplot2", "caret", "openxlsx", "maptools", "rgeos", "ggmap", "scales", "RColorBrewer", "xtable", "stargazer", "readr")
 
 new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
@@ -26,11 +30,15 @@ if(length(new.packages)) install.packages(new.packages)
 
 lapply(packages, library, character.only = TRUE)
 
-basewd <-"~/Dropbox/DiversityAWS"
+#Set up file system to read the correct folders this switches between aws and windows mode
+if((Sys.info()[1]=="Linux")){
+basewd <-"~/Dropbox/DiversityAWS"} else{
+ basewd <- "C:/Users/pc1/Dropbox/DiversityAWS"
+}
 DataFolder <- file.path(basewd, "Data")
 ShapeFiles <- file.path(DataFolder,"ShapeFiles")
 Figures <- file.path(basewd, "Figures")
-
+Data2001 <- file.path(DataFolder, "Census2001")
 select <-dplyr::select
 
 ```
@@ -39,28 +47,54 @@ select <-dplyr::select
 ```{r}
 setwd(DataFolder)
 
-deprivation <-read.xlsx("File_4_ID_2015_Sub-domains_of_deprivation.xlsx")
+deprivation <-read.xlsx("File_4_ID_2015_Sub-domains_of_deprivation.xlsx", sheet = 2)
+  deprivationLAD<-read.xlsx("File_10_ID2015_Local_Authority_District_Summaries.xlsx", sheet = 2)
+```
+
+Get Census Data This doesn't work
+```{r}
+
+temp <- tempfile()
+download.file("http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip",temp, mode = "wb")
+con <- unz(temp, "UV090301_88_GeoPolicy_UK_LSOA.CSV")
+unzip(temp, "UV090301_88_GeoPolicy_UK_LSOA.CSV")
+dd <- read.table("UV090301_88_GeoPolicy_UK_LSOA.CSV", 
+                 sep = ",", 
+                 skip = 5, 
+                 header = T)
+unlink(temp)
 
 ```
 
-open 2001 ethnivity tables
+#Ratio of median house price to median earnings
+
+
 ```{r}
+dt <- "https://www.gov.uk/government/uploads/system/uploads/attachment_data/file/85872/table577.xls"
+dat <- read(dt)
+dat <- read.xls (dt, sheet = 1, header = TRUE)
+```
 
-download.file("http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip", "test.zip")
 
+Open 2001 ethnicity tables
+```{r}
+setwd(DataFolder)
+download.file("http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip", "test")
+
+setwd(Data2001)
 #unzip folder
 con <- unz(description="DownloadData.zip", filename="UV090301_88_GeoPolicy_UK_LSOA.txt")
-dir.create("Census2001")
-setwd("./Census2001")
 unzip("DownloadData.zip")
 
 #import and fix headers
-Census2001 <-read.csv("UV090301_88_GeoPolicy_UK_LSOA.csv", skip = 5)
-names(Census2001)[13:ncol(Census2001)] <-make.names(read_csv("UV090301_88_GeoPolicy_UK_LSOA.csv", skip =1,n_max =1))[13:ncol(Census2001)]
+Census2001 <-read.csv("UV090301_88_GeoPolicy_UK_LSOA.CSV", skip = 5)
+names(Census2001)[13:ncol(Census2001)] <-make.names(read_csv("UV090301_88_GeoPolicy_UK_LSOA.CSV", skip =1,n_max =1))[13:ncol(Census2001)]
+
+
 
 ```
 
-
+NOt Ueful in Main analaysis
 ```{r}
 
 setwd(DataFolder)
@@ -391,6 +425,41 @@ confusionMatrix(preds2, BrexitVotes2$Pct_Remain[-trainsamp])$table %>%
 summary(Mod2)
 coef(Mod2$finalModel)
 ```
+
+
+Include deprivation index.
+```{r}
+names(deprivationLAD)[c(1,4)] <-c("LAD11CD", "RankDepriv")
+
+names(deprivationLAD) <- make.names(names(deprivationLAD))
+
+deprivationLAD <- deprivationLAD  %>%
+  left_join(., BrexitVotes2, by ="LAD11CD")
+
+set.seed(1223)
+trainsampDep<-createDataPartition(deprivationLAD$Pct_Remain, 
+                                  p = 0.6, list =F)
+
+
+ModDepriv <-deprivationLAD %>% 
+  select( LADginisimp, seg.int.rat, RankDepriv) %>% 
+  slice(trainsampDep) %>% train(x=. ,
+              y=(deprivationLAD$Pct_Remain[trainsampDep]),
+       method ="glm", family="binomial")
+
+predsDepriv <- predict(ModDepriv, deprivationLAD[-trainsampDep,])
+
+confusionMatrix(predsDepriv, deprivationLAD$Pct_Remain[-trainsampDep]) 
+
+summary(ModDepriv)
+
+#Essentially higher levels of ethniv diveristy at LAD level and higher levels of segregation increase the probabilioty of voting out. deprivation is significant but has a weak effect increasing likelyhood of voting out as deprivation DECREASES, this is likely to be due to some interaction effect.
+
+#All deprivation indices are highly corrallated 
+cormat <-cor(deprivationLAD[3:12])
+
+```
+
 
 
 Table of the most and least integrated
