@@ -1,0 +1,151 @@
+---
+title: "DiversityMK2"
+author: "Jonathan Bourne"
+date: "11 November 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r Setup}
+packages <- c("caret","gdata", "dplyr", "magrittr", "tidyr", "ggplot2",  "openxlsx", "maptools", "rgeos", "ggmap", "scales", "RColorBrewer", "xtable", "stargazer", "readr")
+
+new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+
+lapply(packages, library, character.only = TRUE)
+
+#Set up file system to read the correct folders this switches between aws and windows mode
+if((Sys.info()[1]=="Linux")){
+basewd <-"~/Dropbox/DiversityAWS"} else{
+ basewd <- "C:/Users/pc1/Dropbox/DiversityAWS"
+}
+DataFolder <- file.path(basewd, "Data")
+ShapeFiles <- file.path(DataFolder,"ShapeFiles")
+Figures <- file.path(basewd, "Figures")
+Data2001 <- file.path(DataFolder, "Census2001")
+LADconv <- file.path(DataFolder, "LADconversion")
+ScotlandData <- file.path(DataFolder, "Scotland")
+
+select <-dplyr::select
+
+```
+
+
+#Load datasets
+
+##Scotland Data
+The scottish data can be found at
+http://www.scotlandscensus.gov.uk/ods-web/download/getDownloadFile.html?downloadFileIds=Output%20Area%20blk
+
+the web page is 
+http://www.scotlandscensus.gov.uk/ods-web/data-warehouse.html#bulkdatatab
+
+The data set is called "Output Area 2011" and is 743mb 
+
+The higher geography conversion table can be found at this link
+http://www.nrscotland.gov.uk/statistics-and-data/geography/our-products/census-datasets/2001-census/2001-indexes
+
+```{r Load Scotland}
+setwd(ScotlandData)
+list.files()
+Scotland<- read.csv("KS201SC.csv")
+ScotHead <- read.xlsx("Header and Footer Data.xlsx")
+
+#have to use SQL to get data from the Access database... What a faff!
+channel <- odbcDriverConnect("Driver={Microsoft Access Driver (*.mdb, *.accdb)};C:/Users/pc1/Dropbox/DiversityAWS/Data/Scotland/2001 OA Indexes Access02.mdb")
+
+```
+
+##England and Wales dataset
+
+###2011 Census Data
+
+Data Link
+
+Webpage
+https://www.nomisweb.co.uk/census/2011/ks201ew
+
+Import England and wales
+```{r Load EW}
+#Output area data
+Kdata <- read.csv("KS201EWDATA.CSV", stringsAsFactors = FALSE) 
+
+#Column names
+Kdesc <- read.csv("KS201EWDESC0.CSV", stringsAsFactors = FALSE) 
+
+```
+
+###Built up area Association
+This data is used to convert london into a single block, instead of having it as multiple LADs
+
+Link
+
+Website
+
+```{r}
+#Built up area association
+BUA <- read.csv("OA11_BUASD11_BUA11_LAD11_RGN11_EW_LU.csv", stringsAsFactors = FALSE)
+
+```
+
+##2001 Census Data
+
+Link
+http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip?$ph=60_61_64_65&step=6&downloadLargeFile=true&fileIndex=1
+
+Website
+https://data.gov.uk/dataset/ethnic_group_2001_census
+
+```{r 2001 Ethnicity}
+setwd(DataFolder)
+download.file("http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip", "test")
+
+setwd(Data2001)
+#unzip folder
+con <- unz(description="DownloadData.zip", filename="UV090301_88_GeoPolicy_UK_LSOA.txt")
+unzip("DownloadData.zip")
+
+#import and fix headers
+Census2001 <-read.csv("UV090301_88_GeoPolicy_UK_LSOA.CSV", skip = 5)
+names(Census2001)[13:ncol(Census2001)] <-make.names(read_csv("UV090301_88_GeoPolicy_UK_LSOA.CSV", skip =1,n_max =1))[13:ncol(Census2001)]
+
+
+
+```
+
+###COnverting LSOA from 2001 to 2011
+There were changes to the LADs between the Census, so conversion needs to be done
+link
+http://webarchive.nationalarchives.gov.uk/20160105160709/http://www.ons.gov.uk/ons/external-links/other/2001-lower-layer-super-output-areas--lsoa--to-2011-lsoas-and-lads.html
+
+Website
+http://webarchive.nationalarchives.gov.uk/20160105160709/http://www.ons.gov.uk/ons/guide-method/geography/products/census/lookup/2001-2011/index.html
+
+Convert LADs from 2001 to 2011
+```{r}
+setwd(LADconv)
+unzip("lower_layer_super_output_areas_(2001)_to_lower_layer_super_output_areas_(2011)_to_local_authority_districts_(2011)_e+w_lookup.zip")
+LADconvtabs <- read.csv("LSOA01_LSOA11_LAD11_EW_LU.csv")
+
+```
+
+
+##Deprivation England
+Link
+https://www.gov.uk/government/uploads/system/uploads/attachment_data/file/467767/File_4_ID_2015_Sub-domains_of_deprivation.xlsx
+
+Website
+
+```{r}
+setwd(DataFolder)
+
+deprivation <-read.xlsx("File_4_ID_2015_Sub-domains_of_deprivation.xlsx", sheet = 2)
+  deprivationLAD<-read.xlsx("File_10_ID2015_Local_Authority_District_Summaries.xlsx", sheet = 2)
+```
+

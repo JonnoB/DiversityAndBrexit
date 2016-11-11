@@ -16,13 +16,14 @@ http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip?$ph=60_61_
 Converting 2001 LSOA to 2011 LAD's
 http://webarchive.nationalarchives.gov.uk/20160105160709/http://www.ons.gov.uk/ons/external-links/other/2001-lower-layer-super-output-areas--lsoa--to-2011-lsoas-and-lads.html
 
+Scottish Census
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r Setup}
-packages <- c("dplyr", "magrittr", "tidyr", "ggplot2", "caret", "openxlsx", "maptools", "rgeos", "ggmap", "scales", "RColorBrewer", "xtable", "stargazer", "readr")
+packages <- c("caret","gdata", "dplyr", "magrittr", "tidyr", "ggplot2",  "openxlsx", "maptools", "rgeos", "ggmap", "scales", "RColorBrewer", "xtable", "stargazer", "readr")
 
 new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
@@ -39,8 +40,23 @@ DataFolder <- file.path(basewd, "Data")
 ShapeFiles <- file.path(DataFolder,"ShapeFiles")
 Figures <- file.path(basewd, "Figures")
 Data2001 <- file.path(DataFolder, "Census2001")
+LADconv <- file.path(DataFolder, "LADconversion")
+ScotlandData <- file.path(DataFolder, "Scotland")
+
 select <-dplyr::select
 
+```
+
+Scotland Data
+```{r Load Scotland}
+setwd(ScotlandData)
+list.files()
+Scotland<- read.xls("Cell Reference Data.xls")
+ScotHead <- read.xlsx("Header and Footer Data.xlsx")
+
+ScotHead[grep("ethnic", ScotHead$Table.Name ),] %>% View
+unzip("Council Area blk.zip")
+Scotland <- read.csv("LC2202SC.csv")
 ```
 
 
@@ -66,8 +82,8 @@ unlink(temp)
 
 ```
 
-#Ratio of median house price to median earnings
 
+#Ratio of median house price to median earnings
 
 ```{r}
 dt <- "https://www.gov.uk/government/uploads/system/uploads/attachment_data/file/85872/table577.xls"
@@ -77,7 +93,7 @@ dat <- read.xls (dt, sheet = 1, header = TRUE)
 
 
 Open 2001 ethnicity tables
-```{r}
+```{r 2001 Ethnicity}
 setwd(DataFolder)
 download.file("http://neighbourhood.statistics.gov.uk/dissemination/DownloadData.zip", "test")
 
@@ -94,8 +110,17 @@ names(Census2001)[13:ncol(Census2001)] <-make.names(read_csv("UV090301_88_GeoPol
 
 ```
 
-NOt Ueful in Main analaysis
+Convert LADs from 2001 to 2011
 ```{r}
+setwd(LADconv)
+unzip("lower_layer_super_output_areas_(2001)_to_lower_layer_super_output_areas_(2011)_to_local_authority_districts_(2011)_e+w_lookup.zip")
+LADconvtabs <- read.csv("LSOA01_LSOA11_LAD11_EW_LU.csv")
+
+```
+
+
+NOt Ueful in Main analaysis
+```{r London Exp}
 
 setwd(DataFolder)
 
@@ -155,7 +180,7 @@ As diversity is relative to perfectly equal weights diversity is maximised at th
 ```
 
 Import England and wales
-```{r}
+```{r Load EW}
 #Output area data
 Kdata <- read.csv("KS201EWDATA.CSV", stringsAsFactors = FALSE) 
 
@@ -211,7 +236,7 @@ LADdiv <- Kpercs %>% group_by(LAD11CD) %>% mutate(fract = TotalPop/sum(TotalPop)
 
 
 London as a single unit
-```{r}
+```{r Calc London}
 #London chunked as 1 block
 LADSLON <- LADS %>% group_by(islondon) %>% 
   summarise_each(funs(first), RGN11CD, RGN11NM, islondonNM)
@@ -228,7 +253,7 @@ LADdivlon <- Kpercs %>% mutate(islondon= ifelse(RGN11CD =="E12000007","E12000007
 
 
 glm for fit
-```{r}
+```{r fit glm}
 predmod <-train(x =select(LADdivlon, ginisimp, LADginisimp), y = LADdivlon$ratio, method = "glm" )
 
 gini2 <- (LADdivlon$LADginisimp)^2
@@ -265,7 +290,7 @@ Cities <- c("London", "Birmingham", "Leeds",  "Bradford", "Manchester", "Liverpo
 
 #Figure of diversities
 The below figure plots all the largest cities in England and Wales against a general linear model of uk diversity, and the line of perfect integration.
-```{r Diversity Model}
+```{r Plot Diversity}
 
 ggplot(LADdivlon, aes(x=LADginisimp, y=ginisimp)) +geom_point(alpha = 0.2) + ggtitle("English/Welsh Ethnic \nDiversity, across Cities and Counties")+ ylab("Neighbourhood") +xlab("Borough/County") + 
   geom_abline(intercept= 0, slope = 1, linetype =2) +
@@ -283,7 +308,7 @@ ggsave("SegIndex.png")
 The instructions for doing this come from 
 http://www.r-bloggers.com/mapping-with-ggplot-create-a-nice-choropleth-map-in-r/
 
-```{r}
+```{r Map Diversity}
 
 setwd(ShapeFiles)
 states.shp <- readShapeSpatial("Local_UnitaryAuthority.shp")
@@ -333,7 +358,7 @@ ggsave("DiversityLondon.png")
 
 
 where are white Brits a minority
-```{r}
+```{r White Minority}
 
 Wmin <- Kpercs %>% filter(WhiteBrit<0.5)
 
@@ -380,7 +405,7 @@ WhiteBritPerc %>% ggplot(., aes(x = LessThan, y = Percentage)) + geom_line() +
 ```
 
 Brexit Votes
-```{r}
+```{r Brexit Votes}
 
 BrexitVotes <-read.csv("http://www.electoralcommission.org.uk/__data/assets/file/0014/212135/EU-referendum-result-data.csv")
 
@@ -403,7 +428,7 @@ summary(Mod1)
 coef(Mod1$finalModel)
 ```
 
-```{r}
+```{r Brexit Clas}
 BrexitVotes2 <- BrexitVotes %>% mutate(Pct_Remain = as.factor(Pct_Remain>50))
 
 set.seed(1223)
@@ -428,7 +453,8 @@ coef(Mod2$finalModel)
 
 
 Include deprivation index.
-```{r}
+```{r Brexit Class Dep}
+
 names(deprivationLAD)[c(1,4)] <-c("LAD11CD", "RankDepriv")
 
 names(deprivationLAD) <- make.names(names(deprivationLAD))
@@ -458,12 +484,32 @@ summary(ModDepriv)
 #All deprivation indices are highly corrallated 
 cormat <-cor(deprivationLAD[3:12])
 
+#Low levels of corelleation between the variables.
+cor(  select(deprivationLAD, LADginisimp, seg.int.rat, RankDepriv), use ="complete.obs")
+
 ```
 
 
+```{r}
+
+ModDepriv2 <-deprivationLAD %>% 
+  select( LADginisimp, seg.int.rat) %>% 
+  slice(trainsampDep) %>% train(x=. ,
+              y=(deprivationLAD$Pct_Remain[trainsampDep]),
+       method ="glm", family="binomial")
+
+predsDepriv2 <- predict(ModDepriv2, deprivationLAD[-trainsampDep,])
+
+confusionMatrix(predsDepriv2, deprivationLAD$Pct_Remain[-trainsampDep]) 
+
+summary(ModDepriv2)
+
+
+```
+
 
 Table of the most and least integrated
-```{r}
+```{r Int tables}
 test <- BrexitVotes %>% arrange(seg.int.rat) %>% 
   select(RGN11NM, LAD11NM, seg.int.rat, Pct_Remain) %>%
   setNames(c("Region", "County/Borough", "Index", "Brexit")) %>%
