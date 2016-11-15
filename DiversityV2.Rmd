@@ -40,6 +40,10 @@ select <-dplyr::select
 #Load datasets
 
 ##Scotland Data
+SCottish data has key differences to EW data making comparison difficult. Data is provided at a much more granular level, and LSOA's do not exist in scotland, an equivalent is the datazone or the intermediate data zone from the 2001 census. Howver whilst and LSOA has 1500 people a datazone has about 500-1000 and an intermediate data zone has 2500 - 6000. Usinf the more granular data would increase the observed segregation whilst using less granular would decrease it.
+To get an overall picture using the datazones might be acceptable as scotland is much less ethnically diverse anyway, so overestimating the segregation probably won't be a problem. details on Datazones can be found at http://www.gov.scot/Publications/2005/02/20697/52626
+
+
 The scottish data can be found at
 http://www.scotlandscensus.gov.uk/ods-web/download/getDownloadFile.html?downloadFileIds=Output%20Area%20blk
 
@@ -49,17 +53,46 @@ http://www.scotlandscensus.gov.uk/ods-web/data-warehouse.html#bulkdatatab
 The data set is called "Output Area 2011" and is 743mb 
 
 The higher geography conversion table can be found at this link
-http://www.nrscotland.gov.uk/statistics-and-data/geography/our-products/census-datasets/2001-census/2001-indexes
+http://www.nrscotland.gov.uk/files//geography/2011-census-indexes-csv.zip
+
+Scottish parlimentary Regions
+http://geoportal.statistics.gov.uk/datasets/2b6bf4b983874e7fb9eba9add458675e_0
+
 
 ```{r Load Scotland}
 setwd(ScotlandData)
-list.files()
-Scotland<- read.csv("KS201SC.csv")
-ScotHead <- read.xlsx("Header and Footer Data.xlsx")
 
-#have to use SQL to get data from the Access database... What a faff!
-channel <- odbcDriverConnect("Driver={Microsoft Access Driver (*.mdb, *.accdb)};C:/Users/pc1/Dropbox/DiversityAWS/Data/Scotland/2001 OA Indexes Access02.mdb")
+Scotland<- read_csv("KS201SC.csv", na="-") %>% setNames(make.names(names(.)))
+Scotland[is.na(Scotland)] <-0
+Scotland <- Scotland %>% mutate(WhiteBritish = White..Scottish+ 
+                            White..Other.British) %>%
+  select(X1, All.people, WhiteBritish) %>% rename(OA = X1)
+  #Add in join of hierarchies and also agreggation
 
+
+
+  setwd(file.path(ScotlandData, "AreaConversion"))  
+  unzip("2011-census-indexes-csv.zip")
+
+HigherArea <- read.csv("OA_TO_HIGHER_AREAS.csv", stringsAsFactors = FALSE)  
+HigherArea <- HigherArea[,c(1, 6, 23, 20)] %>% setNames(c("OA" ,"Council", "OA11CD", "RGN11CD"))
+
+setwd(ScotlandData)
+ParRGN <-read.csv("Scottish_Parliamentary_Regions_May_2016_Names_and_Codes_in_Scotland.csv", stringsAsFactors = F) %>% setNames(c("RGN11CD", "RGN11NM", "x")) %>% select(RGN11CD, RGN11NM)
+
+Scotland <- Scotland %>% left_join(., HigherArea, by ="OA") %>% 
+  left_join(., ParRGN, by = "RGN11CD") %>%
+  filter(!is.na(OA11CD)) %>%
+  group_by(OA11CD) %>% summarise(LAD11CD = first(Council), 
+                                 RGN11CD = first(RGN11CD),
+                                 RGN11NM = first(RGN11NM),
+                                 WhiteBritish = sum(WhiteBritish),
+                                 All.people = sum(All.people))
+
+#There are 16 duplicates, these need to be removed when I am not so tired
+ Scotland <- read.csv("Postcode lookup (revised 100113).csv") %>% 
+   rename( OA11CD=DataZone, LAD11NM = LA_Name) %>% select(OA11CD, LAD11NM) %>% distinct %>%
+   left_join(Scotland, ., by ="OA11CD")
 ```
 
 ##England and Wales dataset
@@ -73,11 +106,19 @@ https://www.nomisweb.co.uk/census/2011/ks201ew
 
 Import England and wales
 ```{r Load EW}
+setwd(DataFolder)
+
 #Output area data
-Kdata <- read.csv("KS201EWDATA.CSV", stringsAsFactors = FALSE) 
+EW <- read.csv("KS201EWDATA.CSV", stringsAsFactors = FALSE) 
 
 #Column names
-Kdesc <- read.csv("KS201EWDESC0.CSV", stringsAsFactors = FALSE) 
+#This is just to show that the correct columns are being selected
+Kdesc <- read.csv("KS201EWDESC0.CSV", stringsAsFactors = FALSE)
+
+names(EW)[-1] <- make.names(Kdesc[, 4])
+rm(Kdesc)
+
+EW <- EW[,1:3] %>% setNames(c("OA11CD", "All.people", "WhiteBritish"))
 
 ```
 
@@ -90,7 +131,7 @@ Website
 
 ```{r}
 #Built up area association
-BUA <- read.csv("OA11_BUASD11_BUA11_LAD11_RGN11_EW_LU.csv", stringsAsFactors = FALSE)
+BUA <- read.csv("OA11_BUASD11_BUA11_LAD11_RGN11_EW_LU.csv", stringsAsFactors = FALSE) %>% select(OA11CD, LAD11CD, LAD11NM, RGN11CD, RGN11NM)
 
 ```
 
@@ -115,11 +156,9 @@ unzip("DownloadData.zip")
 Census2001 <-read.csv("UV090301_88_GeoPolicy_UK_LSOA.CSV", skip = 5)
 names(Census2001)[13:ncol(Census2001)] <-make.names(read_csv("UV090301_88_GeoPolicy_UK_LSOA.CSV", skip =1,n_max =1))[13:ncol(Census2001)]
 
-
-
 ```
 
-###COnverting LSOA from 2001 to 2011
+###Converting LSOA from 2001 to 2011
 There were changes to the LADs between the Census, so conversion needs to be done
 link
 http://webarchive.nationalarchives.gov.uk/20160105160709/http://www.ons.gov.uk/ons/external-links/other/2001-lower-layer-super-output-areas--lsoa--to-2011-lsoas-and-lads.html
@@ -147,5 +186,136 @@ setwd(DataFolder)
 
 deprivation <-read.xlsx("File_4_ID_2015_Sub-domains_of_deprivation.xlsx", sheet = 2)
   deprivationLAD<-read.xlsx("File_10_ID2015_Local_Authority_District_Summaries.xlsx", sheet = 2)
+```
+
+
+
+#Joining the data frames
+
+Join EW and BUA
+```{r}
+EW <- EW %>% left_join(., BUA, by = "OA11CD") %>% 
+  filter(!is.na(LAD11CD))
+
+SEW <- bind_rows(Scotland, EW) %>%  mutate(PercWhiteBritish = WhiteBritish/All.people,
+    PercOther = 1-PercWhiteBritish,
+    gini = 1 - PercWhiteBritish^2 -PercOther^2) 
+
+```
+
+
+Create Gini values
+```{r}
+
+LocalGini <- SEW %>%
+  group_by(LAD11CD) %>% 
+  mutate(LADWhiteBritish =sum(WhiteBritish),
+         LADAll.people = sum(All.people),
+    LADgini=1-(1-LADWhiteBritish/LADAll.people)^2- (LADWhiteBritish/LADAll.people)^2) %>% ungroup %>%
+  mutate(LONLAD = ifelse(RGN11CD == "E12000007", "E12000007", LAD11CD)) 
+
+LonLADgini <- LocalGini %>%
+  group_by(LONLAD) %>% 
+  summarise(WhiteBritish =sum(WhiteBritish),
+         All.people = sum(All.people),
+         gini = mean(gini),
+         LAD11NM = first(LAD11NM),
+         RGN11NM = first(RGN11NM)) %>% ungroup %>%
+  mutate(PercWhiteBritish = WhiteBritish/All.people,
+    PercOther = 1-PercWhiteBritish,
+    LADgini = 1 - PercWhiteBritish^2 -PercOther^2) %>%
+      mutate(LAD11NM = sub(", City of", "", LAD11NM), 
+             LAD11NM = sub(" with Darwen", "", LAD11NM),
+             LAD11NM = sub(" City of", "", LAD11NM),
+             LAD11NM = sub(" City", "", LAD11NM),
+             LAD11NM = sub("City of ", "", LAD11NM))
+
+```
+
+
+Create index using a generalised linear model
+```{r}
+gini2 <- (LonLADgini$LADgini)^2
+predmod <- lm( LonLADgini$gini ~  LonLADgini$LADgini+ gini2 +0)
+
+LonLADgini <-LonLADgini %>% mutate(predictedgini= predict(predmod))
+
+
+  
+  
+
+```
+
+
+```{r}
+Cities <- c("London", "Birmingham", "Leeds",  "Bradford", "Manchester", "Liverpool", "Bristol","Cardiff",  "Oldham", "Blackburn", "Burnley", "Oxford", "Glasgow")
+```
+
+
+```{r}
+LonLADgini %>% ggplot(., aes(y = gini, x= LADgini)) +
+  geom_point(alpha = 0.3) +
+  geom_abline(intercept= 0, slope = 1, linetype =2) +
+  geom_line(aes(x= LADgini, y= predictedgini), color = "red") + 
+  geom_point(data = filter(LonLADgini, LAD11NM %in% Cities),
+             aes(x=LADgini, y=gini)) +
+ geom_text(data = filter(LonLADgini,LAD11NM %in% Cities), 
+            aes(x=LADgini, y=gini, label= LAD11NM ),
+            vjust = -0.5, nudge_y = -0.03)+
+  labs(title="SEW Diversity,\n across Cities and Counties", y = "Neighbourhood", x= "Borough/County")
+```
+
+
+
+```{r}
+
+S2 <- Scotland %>% mutate(PercWhiteBritish = WhiteBritish/All.people)
+S3 <- S2 %>% filter(PercWhiteBritish<0.5)
+
+Wmin <- SEW %>% filter(PercWhiteBritish<0.5)
+
+#Average percent of each lsoa
+mean(SEW$PercWhiteBritish)
+
+#The fraction of LSOA's that white british make up less than 50% of the population
+nrow(Wmin)/nrow(SEW)
+
+#White Britons make up the following percentage of areas where they are less than 50%
+sum(Wmin$All.people*Wmin$PercWhiteBritish)/sum(Wmin$All.people)
+
+# 
+sum(Wmin$All.people)/sum(SEW$All.people)
+
+#Percent of white britons living in an area where they are a minority
+sum(Wmin$WhiteBritish)/sum(SEW$WhiteBritish)
+#Percent of everyone else living in an area where they are a minority
+sum(Wmin$All.people-Wmin$WhiteBritish)/sum(SEW$All.people-SEW$WhiteBritish)
+
+
+ggplot(SEW, aes(x=PercWhiteBritish*100), fill = blue) +
+  geom_density(fill = "steelblue", alpha = 0.5) +
+  labs(title = "White British as a percentage\n of the local population", x = "White British as percentage of Population") +
+  geom_segment(aes(x = mean(SEW$PercWhiteBritish)*100, y = 0, xend = mean(SEW$PercWhiteBritish)*100, yend = 0.05, colour = "segment")) + 
+  theme(legend.position ="none") +
+  annotate("text", x = mean(SEW$PercWhiteBritish)*100, y = 0.06, label = paste("Average",round(mean(SEW$PercWhiteBritish)*100), "%"))
+ggsave("WhiteBritArea.png")
+
+
+#Not used a bit interesting
+ggplot(Wmin, aes(x=PercWhiteBritish*100), fill = blue) +
+    geom_density(fill = "steelblue", alpha = 0.5) +
+  ggtitle("White British as a percentage\n of the local population where White British\n is less than 50% of the local population")
+
+#White British make up less than x in y LSOA
+
+WhiteBritPerc <- data.frame(LessThan = seq(0,1, 0.05)*100,  Percentage =  sapply(seq(0,1, 0.05), function(n){
+  sum(SEW$PercWhiteBritish > n)/nrow(SEW)
+}) %>% round(.,3) * 100
+)
+
+WhiteBritPerc %>% ggplot(., aes(x = LessThan, y = Percentage)) + geom_line() +
+  labs(title = "White British ", y = "Percentage of LSOA's",
+       x = "White British as % of population")
+
 ```
 
