@@ -177,15 +177,16 @@ LADconvtabs <- read.csv("LSOA01_LSOA11_LAD11_EW_LU.csv")
 
 ##Deprivation England
 Link
-https://www.gov.uk/government/uploads/system/uploads/attachment_data/file/467767/File_4_ID_2015_Sub-domains_of_deprivation.xlsx
+https://www.gov.uk/government/statistics/english-indices-of-deprivation-2015
 
 Website
 
 ```{r}
 setwd(DataFolder)
 
-deprivation <-read.xlsx("File_4_ID_2015_Sub-domains_of_deprivation.xlsx", sheet = 2)
-  deprivationLAD<-read.xlsx("File_10_ID2015_Local_Authority_District_Summaries.xlsx", sheet = 2)
+deprivationLAD <-read.xlsx("File_10_ID2015_Local_Authority_District_Summaries.xlsx", sheet = 2) 
+
+  
 ```
 
 
@@ -233,13 +234,41 @@ LonLADgini <- LocalGini %>%
 ```
 
 
+```{r}
+LADgini <- LocalGini %>%
+  group_by(LAD11CD) %>% 
+  summarise(WhiteBritish =sum(WhiteBritish),
+         All.people = sum(All.people),
+         gini = mean(gini),
+         LAD11NM = first(LAD11NM),
+         RGN11NM = first(RGN11NM)) %>% ungroup %>%
+  mutate(PercWhiteBritish = WhiteBritish/All.people,
+    PercOther = 1-PercWhiteBritish,
+    LADgini = 1 - PercWhiteBritish^2 -PercOther^2) %>%
+      mutate(LAD11NM = sub(", City of", "", LAD11NM), 
+             LAD11NM = sub(" with Darwen", "", LAD11NM),
+             LAD11NM = sub(" City of", "", LAD11NM),
+             LAD11NM = sub(" City", "", LAD11NM),
+             LAD11NM = sub("City of ", "", LAD11NM))
+```
+
+
 Create index using a generalised linear model
 ```{r}
+
+#FOr the london as 1 block model
 gini2 <- (LonLADgini$LADgini)^2
 predmod <- lm( LonLADgini$gini ~  LonLADgini$LADgini+ gini2 +0)
+LonLADgini <-LonLADgini %>% mutate(predictedgini= predict(predmod),
+                                   IntScore = (gini-predictedgini)/predictedgini,
+                             IntIndex = dense_rank(IntScore))
 
-LonLADgini <-LonLADgini %>% mutate(predictedgini= predict(predmod))
-
+#For the Pure LAD model.
+gini2 <- (LADgini$LADgini)^2
+predmod <- lm( LADgini$gini ~  LADgini$LADgini+ gini2 +0)
+LADgini <-LADgini %>% mutate(predictedgini= predict(predmod),
+                                   IntScore = (gini-predictedgini)/predictedgini,
+                             IntIndex = dense_rank(IntScore))
 
   
   
@@ -317,5 +346,142 @@ WhiteBritPerc %>% ggplot(., aes(x = LessThan, y = Percentage)) + geom_line() +
   labs(title = "White British ", y = "Percentage of LSOA's",
        x = "White British as % of population")
 
+```
+
+
+#Relationship to Brexit
+
+THis section reduces the model to just England
+
+classification model using diversity and integration scores
+classification model with above and also deprivations scores
+classification model with change in diversity.
+
+```{r}
+BrexitVotes.raw <-read.csv("http://www.electoralcommission.org.uk/__data/assets/file/0014/212135/EU-referendum-result-data.csv")
+
+BrexitVotesEW <-BrexitVotes.raw %>% rename(LAD11CD = Area_Code) %>% 
+  select(LAD11CD, Pct_Remain) %>% mutate(Remain = (Pct_Remain > 50)*1) %>%
+  left_join(LADgini ,., by = "LAD11CD") %>% filter(!is.na(Pct_Remain)) %>%
+  filter(grepl("E", LAD11CD))
+
+#For recalculate the Integration Index
+gini2 <- (BrexitVotesEW$LADgini)^2
+predmod <- lm( BrexitVotesEW$gini ~  BrexitVotesEW$LADgini+ gini2 +0)
+BrexitVotesEW <-BrexitVotesEW %>% mutate(predictedgini= predict(predmod),
+                                   IntScore = (gini-predictedgini)/predictedgini,
+                             IntIndex = dense_rank(IntScore))
+
+BrexitVotesEW <- deprivationLAD[,c(1,5,6)] %>% 
+  setNames(c("LAD11CD", "AvgScore", "RnkAvgScore")) %>% left_join(BrexitVotesEW, ., by ="LAD11CD")
+```
+
+
+
+```{r}
+
+set.seed(1223)
+ trainsamp<-createDataPartition(BrexitVotesEW$Remain, p = 0.66, list =F)
+
+EWClass <- glm(Remain~., data=select(BrexitVotesEW, LADgini,  IntScore, Remain)[trainsamp,], family = "binomial")
+
+EWClassPreds <- predict(EWClass, BrexitVotesEW[-trainsamp,])
+
+#The logisitc regression puts out Log odss so 50% probability is equivalent to 0.
+confusionMatrix((EWClassPreds>0)*1, BrexitVotesEW$Remain[-trainsamp]) 
+summary(EWClass)
+coef(EWClass)
+
+
+
+```
+
+
+including deprivation
+```{r}
+EWClassDepr <- select(BrexitVotesEW, LADgini,
+                      IntScore,AvgScore , Remain) %>%
+  slice(trainsamp) %>%
+  glm(Remain~., data=., family = "binomial")
+
+EWClassDeprPreds <- select(BrexitVotesEW, LADgini,  IntScore,AvgScore , Remain) %>% slice(-trainsamp) %>% predict(EWClassDepr, .)
+
+#The logisitc regression puts out Log odss so 50% probability is equivalent to 0.
+confusionMatrix((EWClassDeprPreds>0)*1, BrexitVotesEW$Remain[-trainsamp]) 
+summary(EWClassDepr)
+coef(EWClassDepr)
+
+```
+
+
+
+including deprivation^2
+```{r}
+EWClassDepr <- select(BrexitVotesEW, LADgini,
+                      IntScore,AvgScore , Remain) %>%
+  mutate(ScoreSqd = AvgScore^2)%>% slice(trainsamp) %>%
+  glm(Remain~., data=., family = "binomial")
+
+EWClassDeprPreds <- select(BrexitVotesEW, LADgini,  IntScore,AvgScore , Remain) %>%mutate(ScoreSqd = AvgScore^2)%>% slice(-trainsamp) %>% predict(EWClassDepr, .)
+
+#The logisitc regression puts out Log odss so 50% probability is equivalent to 0.
+confusionMatrix((EWClassDeprPreds>0)*1, BrexitVotesEW$Remain[-trainsamp]) 
+summary(EWClassDepr)
+coef(EWClassDepr)
+
+```
+
+
+#SEW brexit
+
+just for comparison build the simple model with SEW
+
+
+```{r}
+
+BrexitVotesSEW <-BrexitVotes.raw %>% rename(LAD11CD = Area_Code) %>% 
+  select(LAD11CD, Pct_Remain) %>% mutate(Remain = (Pct_Remain > 50)*1) %>%
+  left_join(LADgini ,., by = "LAD11CD") %>% filter(!is.na(Pct_Remain))
+
+
+set.seed(1223)
+ trainsamp<-createDataPartition(BrexitVotesSEW$Pct_Remain, p = 0.5, list =F)
+
+SEWRegr <- train(x=select(BrexitVotesSEW, gini,  IntScore)[trainsamp,],
+              y=BrexitVotesSEW$Pct_Remain[trainsamp],
+       method ="lmStepAIC")
+
+SEWRegrpreds <- predict(SEWRegr, BrexitVotesSEW[-trainsamp,])
+
+postResample(SEWRegrpreds, BrexitVotesSEW$Pct_Remain[-trainsamp])
+summary(SEWRegr)
+
+coef(SEWRegr$finalModel)
+
+
+```
+
+
+```{r}
+
+set.seed(1223)
+ trainsamp<-createDataPartition(BrexitVotesSEW$Remain, p = 0.66, list =F)
+
+SEWClass <- glm(Remain~., data=select(BrexitVotesSEW, LADgini,  IntScore, Remain)[trainsamp,], family = "binomial")
+
+SEWClassPreds <- predict(SEWClass, BrexitVotesSEW[-trainsamp,])
+
+#The logisitc regression puts out Log odss so 50% probability is equivalent to 0.
+confusionMatrix((SEWClassPreds>0)*1, BrexitVotesSEW$Remain[-trainsamp]) 
+
+confusionMatrix(SEWClassPreds, BrexitVotesSEW$Pct_Remain[-trainsamp])$table %>% 
+  as.data.frame %>% spread(key = Reference, value = Freq)
+
+
+summary(SEWClass)
+coef(SEWClass)
+
+
+tidy(SEWClass)
 ```
 

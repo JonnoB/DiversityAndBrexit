@@ -5,6 +5,7 @@ date: "25 May 2016"
 output: html_document
 ---
 
+sum(c(rep(15,8),60)*c(72, 73,74,79,82,72,63,85,77))/sum(c(rep(15,8),60))
 
 deprivation link
 https://www.gov.uk/government/uploads/system/uploads/attachment_data/file/467767/File_4_ID_2015_Sub-domains_of_deprivation.xlsx
@@ -267,7 +268,10 @@ predmod4 <- lm( LADdiv$ginisimp ~  LADdiv$LADginisimp+ gini3 +0)
     LADdivlon<-   LADdivlon %>% bind_cols(.,  data.frame(
   predictedratio = predict(predmod, select(.,ginisimp, LADginisimp)),
   predictedgini= predict(predmod3, select(.,ratio, LADginisimp)))) %>% 
-      mutate(pred.gin.rat =ifelse(predictedgini/LADginisimp>1, 1, predictedgini/LADginisimp), seg.int.rat = (ratio-pred.gin.rat)/pred.gin.rat )%>% mutate(islondonNM = sub(", City of", "", islondonNM), islondonNM = sub(" with Darwen", "", islondonNM))
+      mutate(pred.gin.rat =ifelse(predictedgini/LADginisimp>1, 1,
+                                  predictedgini/LADginisimp), 
+             seg.int.rat = (ratio-pred.gin.rat)/pred.gin.rat ) %>% mutate(islondonNM = sub(", City of", "", islondonNM), 
+                                                                      islondonNM = sub(" with Darwen", "", islondonNM))
     
 
     LADdiv<-   LADdiv %>% bind_cols(.,  data.frame(
