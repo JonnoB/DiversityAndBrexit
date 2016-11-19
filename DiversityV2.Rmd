@@ -12,8 +12,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 
 ```{r Setup}
-packages <- c("caret","gdata", "dplyr", "magrittr", "tidyr", "ggplot2",  "openxlsx", "maptools", "rgeos", "ggmap", "scales", "RColorBrewer", "xtable", "stargazer", "readr")
+packages <- c("caret","gdata", "dplyr", "magrittr", "tidyr", "ggplot2",  "openxlsx", "maptools", "rgeos", "ggmap", "scales", "RColorBrewer", "xtable", "stargazer", "readr", "purr")
 
+
+#you could replace a lot of the packages with just tidyverse but some people have problems installing it.
 new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
 
@@ -261,14 +263,14 @@ gini2 <- (LonLADgini$LADgini)^2
 predmod <- lm( LonLADgini$gini ~  LonLADgini$LADgini+ gini2 +0)
 LonLADgini <-LonLADgini %>% mutate(predictedgini= predict(predmod),
                                    IntScore = (gini-predictedgini)/predictedgini,
-                             IntIndex = dense_rank(IntScore))
+                             IntIndex = dense_rank(-IntScore))
 
 #For the Pure LAD model.
 gini2 <- (LADgini$LADgini)^2
 predmod <- lm( LADgini$gini ~  LADgini$LADgini+ gini2 +0)
 LADgini <-LADgini %>% mutate(predictedgini= predict(predmod),
                                    IntScore = (gini-predictedgini)/predictedgini,
-                             IntIndex = dense_rank(IntScore))
+                             IntIndex = dense_rank(-IntScore))
 
   
   
@@ -379,18 +381,25 @@ BrexitVotesEW <- deprivationLAD[,c(1,5,6)] %>%
 
 
 ```{r}
+scale_this <- function(x) as.vector(scale(x))
 
-set.seed(1223)
+EWClassTrans <- select(BrexitVotesEW, LADgini,
+                      IntScore , Remain) %>%
+  mutate(LADgini =scale_this(LADgini),
+         IntScore = scale_this(IntScore))
+
+
+set.seed(1228)
  trainsamp<-createDataPartition(BrexitVotesEW$Remain, p = 0.66, list =F)
 
-EWClass <- glm(Remain~., data=select(BrexitVotesEW, LADgini,  IntScore, Remain)[trainsamp,], family = "binomial")
+EWClass <- EWClassTrans %>% slice(trainsamp)%>% glm(Remain~., data=., family = "binomial")
 
-EWClassPreds <- predict(EWClass, BrexitVotesEW[-trainsamp,])
+EWClassPreds <- predict(EWClass, EWClassTrans[-trainsamp,])
 
 #The logisitc regression puts out Log odss so 50% probability is equivalent to 0.
 confusionMatrix((EWClassPreds>0)*1, BrexitVotesEW$Remain[-trainsamp]) 
 summary(EWClass)
-coef(EWClass)
+as.data.frame(t(coef(EWClass)))
 
 
 
@@ -399,17 +408,23 @@ coef(EWClass)
 
 including deprivation
 ```{r}
-EWClassDepr <- select(BrexitVotesEW, LADgini,
+
+EWClassDeprTrans <- select(BrexitVotesEW, LADgini,
                       IntScore,AvgScore , Remain) %>%
-  slice(trainsamp) %>%
+  mutate(LADgini =scale_this(LADgini),
+         IntScore = scale_this(IntScore),
+         AvgScore = scale_this(AvgScore))
+
+EWClassDepr <- EWClassDeprTrans %>% slice(trainsamp) %>%
   glm(Remain~., data=., family = "binomial")
 
-EWClassDeprPreds <- select(BrexitVotesEW, LADgini,  IntScore,AvgScore , Remain) %>% slice(-trainsamp) %>% predict(EWClassDepr, .)
+EWClassDeprPreds <- EWClassDeprTrans %>% slice(-trainsamp) %>% predict(EWClassDepr, .)
 
 #The logisitc regression puts out Log odss so 50% probability is equivalent to 0.
 confusionMatrix((EWClassDeprPreds>0)*1, BrexitVotesEW$Remain[-trainsamp]) 
 summary(EWClassDepr)
 coef(EWClassDepr)
+
 
 ```
 
@@ -417,17 +432,26 @@ coef(EWClassDepr)
 
 including deprivation^2
 ```{r}
-EWClassDepr <- select(BrexitVotesEW, LADgini,
+
+EWClassDeprTransSqd <- select(BrexitVotesEW, LADgini,
                       IntScore,AvgScore , Remain) %>%
-  mutate(ScoreSqd = AvgScore^2)%>% slice(trainsamp) %>%
+  mutate(LADgini =scale_this(LADgini),
+         IntScore = scale_this(IntScore),
+         AvgScore = scale_this(AvgScore),
+    ScoreSqd = AvgScore^2)
+
+EWClassDeprSqd <- EWClassDeprTransSqd %>% slice(trainsamp) %>%
   glm(Remain~., data=., family = "binomial")
 
-EWClassDeprPreds <- select(BrexitVotesEW, LADgini,  IntScore,AvgScore , Remain) %>%mutate(ScoreSqd = AvgScore^2)%>% slice(-trainsamp) %>% predict(EWClassDepr, .)
+EWClassDeprPredsSqd <- EWClassDeprTransSqd %>%  slice(-trainsamp) %>%
+  predict(EWClassDeprSqd, .)
 
 #The logisitc regression puts out Log odss so 50% probability is equivalent to 0.
-confusionMatrix((EWClassDeprPreds>0)*1, BrexitVotesEW$Remain[-trainsamp]) 
-summary(EWClassDepr)
-coef(EWClassDepr)
+confusionMatrix((EWClassDeprPredsSqd>0)*1, BrexitVotesEW$Remain[-trainsamp]) 
+summary(EWClassDeprSqd)
+coef(EWClassDeprSqd)
+
+
 
 ```
 
@@ -464,24 +488,79 @@ coef(SEWRegr$finalModel)
 
 ```{r}
 
+SEWClassdf <- select(BrexitVotesSEW, LADgini,
+                      IntScore, Remain) %>%
+  mutate(LADgini =scale_this(LADgini),
+         IntScore = scale_this(IntScore))
+
+
 set.seed(1223)
- trainsamp<-createDataPartition(BrexitVotesSEW$Remain, p = 0.66, list =F)
+ trainsampSEW<-createDataPartition(SEWClassdf$Remain, p = 0.66, list =F)
 
-SEWClass <- glm(Remain~., data=select(BrexitVotesSEW, LADgini,  IntScore, Remain)[trainsamp,], family = "binomial")
+SEWClass <- SEWClassdf %>% slice(trainsampSEW) %>% glm(Remain~., data=., family = "binomial")
 
-SEWClassPreds <- predict(SEWClass, BrexitVotesSEW[-trainsamp,])
+SEWClassPreds <- SEWClassdf %>% slice(-trainsampSEW) %>%
+  predict(SEWClass, .)
 
-#The logisitc regression puts out Log odss so 50% probability is equivalent to 0.
-confusionMatrix((SEWClassPreds>0)*1, BrexitVotesSEW$Remain[-trainsamp]) 
+#The logisitc regression puts out Log odss so 50% probability is equivalent to 0. 
+SEWClassdf %>% slice(-trainsampSEW) %>%
+confusionMatrix((SEWClassPreds>0)*1, .$Remain) 
 
-confusionMatrix(SEWClassPreds, BrexitVotesSEW$Pct_Remain[-trainsamp])$table %>% 
-  as.data.frame %>% spread(key = Reference, value = Freq)
-
+confusionMatrix((SEWClassPreds>0)*1, SEWClassdf$Remain[-trainsampSEW])
 
 summary(SEWClass)
 coef(SEWClass)
-
+as.data.frame(t(coef(SEWClass)))
 
 tidy(SEWClass)
+```
+
+
+Sumarising the models
+```{r model summary}
+#the data frame of the coeffciients of all the models.
+ModelFrame <- bind_rows(
+  as.data.frame(t(coef(EWClassDeprSqd))),
+  as.data.frame(t(coef(EWClassDepr))),
+  as.data.frame(t(coef(EWClass))),
+  as.data.frame(t(coef(SEWClass)))) %>% mutate(ind = c(3:1,4)) %>%
+  arrange(ind) %>% 
+  bind_cols(data.frame(Model = c("Basic", "Deprivation", "Deprivation Squared", "SEW Basic")),.) %>% select(-ind) %>% 
+  stargazer(type = "html", summary = FALSE)
+
+```
+
+
+
+
+Table of the most and least integrated
+```{r Int tables}
+Intab <- BrexitVotesSEW %>%  
+  select(RGN11NM, LAD11NM, IntScore, Remain) %>%
+  setNames(c("Region", "LAD", "Int Score", "Brexit")) %>%
+  mutate(`Int Score` = round(`Int Score`, 2), Brexit = if_else(Brexit==1, "In", "Out"))
+
+Intab  %>% arrange(`Int Score`) %>% slice(1:10) %>% stargazer(type = "html", summary = FALSE)
+  
+Intab  %>% arrange(desc(`Int Score`)) %>%  slice(1:10) %>% stargazer(type = "html", summary = FALSE)
+
+setwd(Figures)
+Intab %>% ggplot(., aes(x= Brexit, y= `Int Score`, fill = Brexit)) + geom_boxplot() + 
+  labs(title ="Brexit vote by Integration score", 
+       x = "Brexit Vote", 
+       y= "Integration Index Score") + 
+  theme(legend.position ="none")
+ggsave("BrexitIntScore.png")
+
+
+t.test(Intab$`Int Score`[Intab$Brexit == "In"],
+       Intab$`Int Score`[Intab$Brexit == "Out"],
+       alternative = "greater")
+
+
+```
+
+```{r}
+
 ```
 
